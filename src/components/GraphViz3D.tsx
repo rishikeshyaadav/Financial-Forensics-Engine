@@ -11,6 +11,8 @@ const ForceGraph3D = dynamic(() => import('react-force-graph-3d'), {
     loading: () => <div className="flex items-center justify-center p-20 text-accent">Loading 3D Engine...</div>
 });
 
+import { Maximize, ZoomIn, ZoomOut, Focus } from 'lucide-react';
+
 interface GraphViz3DProps {
     data: AnalysisResult;
     selectedRing: string | null;
@@ -145,6 +147,64 @@ export default function GraphViz3D({ data, selectedRing, searchQuery = '' }: Gra
         return theme === 'bright' ? 'rgba(150, 150, 150, 0.2)' : 'rgba(180, 180, 180, 0.15)';
     }, [ringMemberSet, theme, hoverNode, highlightLinks]);
 
+    // Center camera on data load or search
+    // Center camera on data load or search
+    const handleRecenter = useCallback(() => {
+        if (!fgRef.current) return;
+        fgRef.current.cameraPosition(
+            { x: 0, y: 0, z: 250 },
+            { x: 0, y: 0, z: 0 },
+            1000
+        );
+    }, []);
+
+    useEffect(() => {
+        // Initial center
+        const timer = setTimeout(handleRecenter, 200);
+        return () => clearTimeout(timer);
+    }, [data, selectedRing, handleRecenter]);
+
+    // Graph controls
+    // Graph controls
+    const handleZoomIn = () => {
+        if (!fgRef.current) return;
+        const cam = fgRef.current.camera();
+        const controls = fgRef.current.controls();
+        const target = controls.target;
+
+        // Calculate new position closer to target
+        // Vector from target to camera
+        const x = cam.position.x - target.x;
+        const y = cam.position.y - target.y;
+        const z = cam.position.z - target.z;
+
+        // Move 20% closer
+        fgRef.current.cameraPosition(
+            { x: target.x + x * 0.7, y: target.y + y * 0.7, z: target.z + z * 0.7 },
+            target,
+            600
+        );
+    };
+
+    const handleZoomOut = () => {
+        if (!fgRef.current) return;
+        const cam = fgRef.current.camera();
+        const controls = fgRef.current.controls();
+        const target = controls.target;
+
+        // Calculate new position further from target
+        const x = cam.position.x - target.x;
+        const y = cam.position.y - target.y;
+        const z = cam.position.z - target.z;
+
+        // Move 20% further
+        fgRef.current.cameraPosition(
+            { x: target.x + x * 1.3, y: target.y + y * 1.3, z: target.z + z * 1.3 },
+            target,
+            600
+        );
+    };
+
     // Memoize graph data to prevent re-renders
     const graphData = useMemo(() => {
         return {
@@ -154,17 +214,38 @@ export default function GraphViz3D({ data, selectedRing, searchQuery = '' }: Gra
     }, [data]);
 
     return (
-        <div className="relative w-full h-[600px] border border-border rounded-2xl overflow-hidden shadow-xl bg-graph">
+        <div className="relative w-full h-[600px] border border-border/50 rounded-2xl overflow-hidden shadow-2xl bg-graph group">
             {/* Legend - preserved */}
-            <div className="absolute top-4 left-4 z-10 bg-card/80 backdrop-blur-md p-3 rounded-xl shadow-sm border border-border">
-                <h3 className="text-sm font-semibold text-t-primary">Network Visualization</h3>
-                <p className="text-xs text-t-secondary">{graphData.nodes.length} Accounts • {graphData.links.length} Edges</p>
-                <div className="mt-2 flex flex-wrap gap-3 text-xs text-t-secondary">
-                    <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded-full bg-red-500" />High Risk</div>
-                    <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded-full bg-amber-500" />Medium</div>
-                    <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded-full bg-blue-500" />Safe</div>
-                    {selectedRing && <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded-full bg-orange-500" />Ring</div>}
+            {/* Legend - Glassmorphism */}
+            <div className="absolute top-4 left-4 z-10 bg-card/60 backdrop-blur-xl p-4 rounded-2xl shadow-lg border border-border/50 transition-all hover:bg-card/80">
+                <h3 className="text-sm font-bold text-t-primary mb-1">Network Visualization</h3>
+                <p className="text-xs text-t-secondary mb-3">{graphData.nodes.length} Accounts • {graphData.links.length} Edges</p>
+                <div className="flex flex-col gap-2">
+                    <div className="flex flex-wrap gap-2 text-xs text-t-secondary">
+                        <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.6)]" />High Risk</div>
+                        <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-amber-500 shadow-[0_0_8px_rgba(245,158,11,0.6)]" />Medium</div>
+                        <div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-blue-500" />Safe</div>
+                    </div>
+                    {selectedRing && (
+                        <div className="flex items-center gap-1.5 text-xs text-orange-500 font-medium animate-pulse">
+                            <div className="w-2 h-2 rounded-full bg-orange-500 shadow-[0_0_8px_rgba(249,115,22,0.8)]" />
+                            Active Ring View
+                        </div>
+                    )}
                 </div>
+            </div>
+
+            {/* Controls */}
+            <div className="absolute bottom-6 right-6 z-10 flex flex-col gap-2">
+                <button onClick={handleZoomIn} className="p-2 bg-card/80 backdrop-blur-md border border-border rounded-xl text-t-secondary hover:text-t-primary hover:bg-card shadow-lg transition-all" title="Zoom In">
+                    <ZoomIn size={18} />
+                </button>
+                <button onClick={handleZoomOut} className="p-2 bg-card/80 backdrop-blur-md border border-border rounded-xl text-t-secondary hover:text-t-primary hover:bg-card shadow-lg transition-all" title="Zoom Out">
+                    <ZoomOut size={18} />
+                </button>
+                <button onClick={handleRecenter} className="p-2 bg-card/80 backdrop-blur-md border border-border rounded-xl text-t-secondary hover:text-t-primary hover:bg-card shadow-lg transition-all mt-2" title="Recenter">
+                    <Focus size={18} />
+                </button>
             </div>
 
             <ForceGraph3D
@@ -191,8 +272,17 @@ export default function GraphViz3D({ data, selectedRing, searchQuery = '' }: Gra
                 }}
                 onNodeHover={handleNodeHover}
                 showNavInfo={false}
-                warmupTicks={20} // Provide some initial stability
-                cooldownTicks={100} // Stop simulation sooner to save GPU
+                // Optimization Config
+                rendererConfig={{
+                    powerPreference: "high-performance",
+                    antialias: true,
+                    alpha: true,
+                    preserveDrawingBuffer: false
+                }}
+                d3VelocityDecay={0.4} // Heavier decay for smoother, less jittery movement
+                d3AlphaDecay={0.01}   // Slower alpha decay for longer, more precise settling
+                warmupTicks={70}      // More warmup for initial stability
+                cooldownTicks={200}
             />
 
             {/* Tooltip - preserved */}
