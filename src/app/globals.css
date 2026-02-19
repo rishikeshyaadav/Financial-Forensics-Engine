@@ -1,67 +1,142 @@
 @import "tailwindcss";
 
-:root {
-  /* Warm Light Theme Base */
-  --background: #FDFCF8; /* Cream 50 */
-  --foreground: #2D2A26; /* Warm Gray 800 */
-  
-  /* Custom Colors */
-  --color-cream-50: #FDFCF8;
-  --color-cream-100: #F9F7F2;
-  --color-cream-200: #F4EFE6;
-  --color-cream-300: #EAE0D1;
-  --color-cream-900: #544A3D;
+/* ═══════════════════════════════════════════
+   THEME: BRIGHT (default) — Warm Cream & Gold
+   ═══════════════════════════════════════════ */
+:root,
+[data-theme="bright"] {
+  --bg-page: #FDFCF8;
+  --bg-card: #FFFFFF;
+  --bg-card-hover: #F9F7F2;
+  --bg-input: #F4EFE6;
+  --bg-header: rgba(255, 255, 255, 0.8);
+  --bg-badge: #F4EFE6;
+  --bg-graph: #FDFCF8;
 
-  --color-gold-400: #E6B325;
-  --color-gold-500: #D4A017;
-  --color-gold-600: #B8860B;
+  --text-primary: #1C1917;
+  --text-secondary: #57534E;
+  --text-muted: #A8A29E;
+  --text-inverse: #FDFCF8;
 
-  --color-orange-300: #FDBA74;
-  --color-orange-400: #FB923C;
-  --color-orange-500: #F97316;
+  --border-color: #EAE0D1;
+  --border-light: #F4EFE6;
 
-  --color-warm-gray-800: #2D2A26;
-  --color-warm-gray-900: #1C1917;
+  --accent-gold: #D4A017;
+  --accent-gold-light: #FEF3C7;
+  --accent-gold-text: #92400E;
+
+  --shadow-color: rgba(0, 0, 0, 0.05);
 }
 
+/* ═══════════════════════════════════════════
+   THEME: NIGHT — Deep Slate & Blue
+   ═══════════════════════════════════════════ */
+[data-theme="night"] {
+  --bg-page: #0F172A;
+  --bg-card: #1E293B;
+  --bg-card-hover: #334155;
+  --bg-input: #1E293B;
+  --bg-header: rgba(15, 23, 42, 0.85);
+  --bg-badge: #334155;
+  --bg-graph: #0F172A;
+
+  --text-primary: #F1F5F9;
+  --text-secondary: #94A3B8;
+  --text-muted: #64748B;
+  --text-inverse: #0F172A;
+
+  --border-color: #334155;
+  --border-light: #1E293B;
+
+  --accent-gold: #FBBF24;
+  --accent-gold-light: rgba(251, 191, 36, 0.15);
+  --accent-gold-text: #FBBF24;
+
+  --shadow-color: rgba(0, 0, 0, 0.3);
+}
+
+/* ═══════════════════════════════════════════
+   THEME: BLACK — AMOLED Pure Black & Neon
+   ═══════════════════════════════════════════ */
+[data-theme="black"] {
+  --bg-page: #000000;
+  --bg-card: #0A0A0A;
+  --bg-card-hover: #171717;
+  --bg-input: #0A0A0A;
+  --bg-header: rgba(0, 0, 0, 0.9);
+  --bg-badge: #171717;
+  --bg-graph: #000000;
+
+  --text-primary: #FAFAFA;
+  --text-secondary: #A1A1AA;
+  --text-muted: #71717A;
+  --text-inverse: #000000;
+
+  --border-color: #27272A;
+  --border-light: #18181B;
+
+  --accent-gold: #22D3EE;
+  --accent-gold-light: rgba(34, 211, 238, 0.12);
+  --accent-gold-text: #22D3EE;
+
+  --shadow-color: rgba(34, 211, 238, 0.05);
+}
+
+/* ═══════════════════════════════════════════
+   Tailwind CSS v4 Theme Tokens
+   ═══════════════════════════════════════════ */
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  
-  --color-cream-50: var(--color-cream-50);
-  --color-cream-100: var(--color-cream-100);
-  --color-cream-200: var(--color-cream-200);
-  --color-cream-300: var(--color-cream-300);
-  --color-cream-900: var(--color-cream-900);
+  --color-page: var(--bg-page);
+  --color-card: var(--bg-card);
+  --color-card-hover: var(--bg-card-hover);
+  --color-input: var(--bg-input);
+  --color-header: var(--bg-header);
+  --color-badge: var(--bg-badge);
 
-  --color-gold-400: var(--color-gold-400);
-  --color-gold-500: var(--color-gold-500);
-  --color-gold-600: var(--color-gold-600);
+  --color-t-primary: var(--text-primary);
+  --color-t-secondary: var(--text-secondary);
+  --color-t-muted: var(--text-muted);
+  --color-t-inverse: var(--text-inverse);
 
-  --color-orange-300: var(--color-orange-300);
-  --color-orange-400: var(--color-orange-400);
-  --color-orange-500: var(--color-orange-500);
+  --color-border: var(--border-color);
+  --color-border-light: var(--border-light);
 
-  --color-warm-gray-800: var(--color-warm-gray-800);
-  --color-warm-gray-900: var(--color-warm-gray-900);
+  --color-accent: var(--accent-gold);
+  --color-accent-light: var(--accent-gold-light);
+  --color-accent-text: var(--accent-gold-text);
+
+  --color-shadow: var(--shadow-color);
 
   --animate-fade-in: fadeIn 0.5s ease-out;
   --animate-slide-up: slideUp 0.6s ease-out;
-  --animate-pulse-slow: pulse 3s infinite;
 
   @keyframes fadeIn {
-    from { opacity: 0; }
-    to { opacity: 1; }
+    from {
+      opacity: 0;
+    }
+
+    to {
+      opacity: 1;
+    }
   }
+
   @keyframes slideUp {
-    from { transform: translateY(20px); opacity: 0; }
-    to { transform: translateY(0); opacity: 1; }
+    from {
+      transform: translateY(20px);
+      opacity: 0;
+    }
+
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
   }
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-sans), sans-serif;
+  background: var(--bg-page);
+  color: var(--text-primary);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
   overflow-x: hidden;
+  transition: background-color 0.3s ease, color 0.3s ease;
 }

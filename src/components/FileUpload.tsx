@@ -104,8 +104,8 @@ export default function FileUpload({ onDataLoaded }: FileUploadProps) {
                 className={`
           relative border-2 border-dashed rounded-2xl p-10 text-center transition-all duration-300
           ${isDragging
-                        ? 'border-gold-500 bg-gold-400/10 scale-[1.02]'
-                        : 'border-cream-300 bg-cream-100 hover:border-gold-400 hover:bg-cream-200'}
+                        ? 'border-accent bg-accent-light scale-[1.02]'
+                        : 'border-border bg-input hover:border-accent hover:bg-card-hover'}
         `}
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
@@ -119,20 +119,20 @@ export default function FileUpload({ onDataLoaded }: FileUploadProps) {
                 />
 
                 <div className="flex flex-col items-center justify-center space-y-4">
-                    <div className={`p-4 rounded-full ${isDragging ? 'bg-gold-100 text-gold-600' : 'bg-cream-200 text-warm-gray-800'}`}>
+                    <div className={`p-4 rounded-full ${isDragging ? 'bg-accent-light text-accent' : 'bg-badge text-t-primary'}`}>
                         <UploadCloud size={40} />
                     </div>
 
                     <div className="space-y-2">
-                        <h3 className="text-xl font-semibold text-warm-gray-900">
+                        <h3 className="text-xl font-semibold text-t-primary">
                             Upload Transaction Data
                         </h3>
-                        <p className="text-warm-gray-800/70">
+                        <p className="text-t-secondary">
                             Drag & drop your CSV file here, or click to browse
                         </p>
                     </div>
 
-                    <div className="flex items-center gap-2 text-xs text-warm-gray-800/50">
+                    <div className="flex items-center gap-2 text-xs text-t-muted">
                         <FileType size={14} />
                         <span>Required: transaction_id, sender_id, receiver_id, amount, timestamp</span>
                     </div>
@@ -145,7 +145,7 @@ export default function FileUpload({ onDataLoaded }: FileUploadProps) {
                         initial={{ opacity: 0, height: 0 }}
                         animate={{ opacity: 1, height: 'auto' }}
                         exit={{ opacity: 0, height: 0 }}
-                        className="mt-4 p-4 bg-red-50 text-red-700 rounded-xl flex items-center gap-3 border border-red-100"
+                        className="mt-4 p-4 bg-red-500/10 text-red-500 rounded-xl flex items-center gap-3 border border-red-500/20"
                     >
                         <AlertCircle size={20} />
                         <span className="font-medium">{error}</span>
@@ -157,7 +157,7 @@ export default function FileUpload({ onDataLoaded }: FileUploadProps) {
                         initial={{ opacity: 0, height: 0 }}
                         animate={{ opacity: 1, height: 'auto' }}
                         exit={{ opacity: 0, height: 0 }}
-                        className="mt-4 p-4 bg-green-50 text-green-700 rounded-xl flex items-center gap-3 border border-green-100"
+                        className="mt-4 p-4 bg-green-500/10 text-green-500 rounded-xl flex items-center gap-3 border border-green-500/20"
                     >
                         <CheckCircle2 size={20} />
                         <span className="font-medium">{success}</span>
@@ -168,7 +168,7 @@ export default function FileUpload({ onDataLoaded }: FileUploadProps) {
                     <motion.div
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
-                        className="mt-4 text-center text-gold-600 font-medium"
+                        className="mt-4 text-center text-accent font-medium"
                     >
                         Processing transactions...
                     </motion.div>
