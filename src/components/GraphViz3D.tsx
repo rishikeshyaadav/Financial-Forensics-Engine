@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useMemo, useEffect, useRef, useCallback } from 'react';
+import React, { useMemo, useEffect, useRef, useCallback, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { AnalysisResult, Node } from '@/types';
+import { AnalysisResult, Node, Link } from '@/types';
 import { useTheme } from '@/context/ThemeContext';
+import * as THREE from 'three';
 
 const ForceGraph3D = dynamic(() => import('react-force-graph-3d'), {
     ssr: false,
@@ -25,6 +26,9 @@ const THEME_BG: Record<string, string> = {
 export default function GraphViz3D({ data, selectedRing, searchQuery = '' }: GraphViz3DProps) {
     const fgRef = useRef<any>(null);
     const { theme } = useTheme();
+    const [hoverNode, setHoverNode] = useState<string | null>(null);
+    const [highlightNodes, setHighlightNodes] = useState<Set<string>>(new Set());
+    const [highlightLinks, setHighlightLinks] = useState<Set<string>>(new Set());
 
     // Pre-compute ring member set
     const ringMemberSet = useMemo(() => {
@@ -44,7 +48,42 @@ export default function GraphViz3D({ data, selectedRing, searchQuery = '' }: Gra
         return matched.size > 0 ? matched : null;
     }, [searchQuery, data.graph.nodes]);
 
-    // Focus camera on ring centroid
+    // Pre-compute neighbors map for O(1) hover lookup
+    const neighborsMap = useMemo(() => {
+        const map = new Map<string, string[]>();
+        data.graph.links.forEach(link => {
+            const src = typeof link.source === 'object' ? (link.source as any).id : link.source;
+            const tgt = typeof link.target === 'object' ? (link.target as any).id : link.target;
+            if (!map.has(src)) map.set(src, []);
+            if (!map.has(tgt)) map.set(tgt, []);
+            map.get(src)!.push(tgt);
+            map.get(tgt)!.push(src);
+        });
+        return map;
+    }, [data.graph.links]);
+
+    // Handle node hover
+    const handleNodeHover = useCallback((node: any | null) => {
+        setHoverNode(node ? node.id : null);
+        if (node) {
+            const neighbors = neighborsMap.get(node.id) || [];
+            setHighlightNodes(new Set([node.id, ...neighbors]));
+            const links = new Set<string>();
+            data.graph.links.forEach(l => {
+                const src = typeof l.source === 'object' ? (l.source as any).id : l.source;
+                const tgt = typeof l.target === 'object' ? (l.target as any).id : l.target;
+                if (src === node.id || tgt === node.id) {
+                    links.add(l.transaction_id || `${src}-${tgt}`);
+                }
+            });
+            setHighlightLinks(links);
+        } else {
+            setHighlightNodes(new Set());
+            setHighlightLinks(new Set());
+        }
+    }, [neighborsMap, data.graph.links]);
+
+    // Focus camera
     useEffect(() => {
         if (selectedRing && fgRef.current && ringMemberSet) {
             let x = 0, y = 0, z = 0, count = 0;
@@ -71,57 +110,68 @@ export default function GraphViz3D({ data, selectedRing, searchQuery = '' }: Gra
         links: data.graph.links.map(l => ({ ...l })),
     }), [data]);
 
-    const getNodeColor = useCallback((node: any) => {
-        // Search highlight takes priority
-        if (searchMatchSet) {
-            return searchMatchSet.has(node.id) ? '#22D3EE' : 'rgba(120, 120, 120, 0.12)';
+    // Custom 3D Object for Nodes (Glassmorphism)
+    const nodeThreeObject = useCallback((node: any) => {
+        // Base color
+        let color = theme === 'bright' ? '#3B82F6' : '#60A5FA';
+        if (node.riskScore > 80) color = '#EF4444';
+        else if (node.riskScore > 50) color = '#F59E0B';
+
+        // Override if matched/ring/highlighted
+        if (searchMatchSet && searchMatchSet.has(node.id)) color = '#22D3EE';
+        else if (ringMemberSet && ringMemberSet.has(node.id)) color = '#F97316';
+
+        // Dim if hovering another node and not related
+        if (hoverNode && !highlightNodes.has(node.id)) {
+            color = theme === 'bright' ? '#E5E7EB' : '#1E293B'; // Grayed out
         }
-        // Ring highlight
-        if (ringMemberSet) {
-            return ringMemberSet.has(node.id) ? '#F97316' : 'rgba(120, 120, 120, 0.12)';
-        }
-        // Default risk-based coloring
-        if (node.riskScore > 80) return '#EF4444';
-        if (node.riskScore > 50) return '#F59E0B';
-        return theme === 'bright' ? '#3B82F6' : '#60A5FA';
-    }, [ringMemberSet, searchMatchSet, theme]);
+
+        const size = node.riskScore > 50 ? 6 : 4;
+        const geometry = new THREE.SphereGeometry(size, 32, 32);
+        const material = new THREE.MeshPhysicalMaterial({
+            color: color,
+            metalness: 0.1,
+            roughness: 0.1,
+            transmission: 0.6, // Glass effect
+            thickness: 2,
+            clearcoat: 1,
+            clearcoatRoughness: 0.1,
+        });
+
+        return new THREE.Mesh(geometry, material);
+    }, [theme, ringMemberSet, searchMatchSet, hoverNode, highlightNodes]);
 
     const getLinkColor = useCallback((link: any) => {
-        if (ringMemberSet) {
-            const srcId = typeof link.source === 'object' ? link.source.id : link.source;
-            const tgtId = typeof link.target === 'object' ? link.target.id : link.target;
-            if (ringMemberSet.has(srcId) && ringMemberSet.has(tgtId)) return '#EF4444';
-            return theme === 'bright' ? 'rgba(200, 200, 200, 0.06)' : 'rgba(100, 100, 100, 0.06)';
-        }
-        return theme === 'bright' ? 'rgba(100, 100, 100, 0.2)' : 'rgba(180, 180, 180, 0.15)';
-    }, [ringMemberSet, theme]);
+        // Highlight logic
+        const srcId = typeof link.source === 'object' ? link.source.id : link.source;
+        const tgtId = typeof link.target === 'object' ? link.target.id : link.target;
+        const linkId = link.transaction_id || `${srcId}-${tgtId}`;
 
-    const getNodeLabel = useCallback((node: any) => {
-        const bgColor = theme === 'bright' ? 'rgba(0,0,0,0.88)' : 'rgba(30,41,59,0.95)';
-        return [
-            `<div style="background:${bgColor};color:#fff;padding:8px 12px;border-radius:8px;font-family:monospace;font-size:12px;max-width:280px;border:1px solid rgba(255,255,255,0.1)">`,
-            `<div style="font-weight:bold;font-size:14px;margin-bottom:4px">${node.id}</div>`,
-            `<div>Risk Score: <span style="color:${node.riskScore > 80 ? '#EF4444' : node.riskScore > 50 ? '#F59E0B' : '#60A5FA'}">${node.riskScore}</span></div>`,
-            `<div>In: ${node.inDegree} | Out: ${node.outDegree}</div>`,
-            `<div>$${node.totalIn.toFixed(2)} in | $${node.totalOut.toFixed(2)} out</div>`,
-            node.patterns?.length > 0 ? `<div style="margin-top:4px;color:#F97316">⚠ ${node.patterns.join(', ')}</div>` : '',
-            '</div>',
-        ].join('');
-    }, [theme]);
+        if (hoverNode) {
+            return highlightLinks.has(linkId) ? (theme === 'bright' ? '#1C1917' : '#F1F5F9') : 'rgba(100,100,100,0.02)';
+        }
+
+        if (ringMemberSet) {
+            if (ringMemberSet.has(srcId) && ringMemberSet.has(tgtId)) return '#EF4444';
+            return 'rgba(100, 100, 100, 0.03)';
+        }
+
+        return theme === 'bright' ? 'rgba(150, 150, 150, 0.2)' : 'rgba(180, 180, 180, 0.15)';
+    }, [ringMemberSet, theme, hoverNode, highlightLinks]);
 
     const handleNodeClick = useCallback((node: any) => {
         if (!fgRef.current) return;
-        const distance = 60;
+        const distance = 80;
         const distRatio = 1 + distance / Math.hypot(node.x || 1, node.y || 1, node.z || 1);
         fgRef.current.cameraPosition(
             { x: (node.x || 0) * distRatio, y: (node.y || 0) * distRatio, z: (node.z || 0) * distRatio },
             { x: node.x, y: node.y, z: node.z },
-            2000
+            1500
         );
     }, []);
 
     return (
-        <div className="relative w-full h-[600px] border border-border rounded-2xl overflow-hidden shadow-xl bg-page">
+        <div className="relative w-full h-[600px] border border-border rounded-2xl overflow-hidden shadow-xl bg-graph">
             {/* Legend */}
             <div className="absolute top-4 left-4 z-10 bg-card/80 backdrop-blur-md p-3 rounded-xl shadow-sm border border-border">
                 <h3 className="text-sm font-semibold text-t-primary">Network Visualization</h3>
@@ -131,37 +181,61 @@ export default function GraphViz3D({ data, selectedRing, searchQuery = '' }: Gra
                     <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded-full bg-amber-500" />Medium</div>
                     <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded-full bg-blue-500" />Safe</div>
                     {selectedRing && <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded-full bg-orange-500" />Ring</div>}
-                    {searchMatchSet && <div className="flex items-center gap-1"><div className="w-2.5 h-2.5 rounded-full bg-cyan-400" />Match</div>}
                 </div>
             </div>
 
             <ForceGraph3D
                 ref={fgRef}
                 graphData={graphData}
-                nodeLabel={getNodeLabel}
-                nodeColor={getNodeColor}
-                nodeVal={(node: any) => (node.riskScore > 50 ? 4 : 1.5)}
+                nodeThreeObject={nodeThreeObject}
+                nodeLabel={(node: any) => node.id} // Simple label for now, or custom HTML tooltip
                 linkColor={getLinkColor}
-                linkWidth={selectedRing ? 2 : 0.5}
-                linkDirectionalParticles={selectedRing ? 4 : 1}
-                linkDirectionalParticleSpeed={() => 0.004}
-                linkDirectionalArrowLength={3}
-                linkDirectionalArrowRelPos={1}
+                linkWidth={link => (hoverNode && highlightLinks.has(link.transaction_id || '') ? 2 : selectedRing ? 1.5 : 0.5)}
+                linkCurvature={0.25}
+                linkDirectionalParticles={2}
+                linkDirectionalParticleSpeed={0.005}
+                linkDirectionalParticleWidth={1.5}
                 backgroundColor={THEME_BG[theme] || '#FDFCF8'}
                 onNodeClick={handleNodeClick}
+                onNodeHover={handleNodeHover}
+                showNavInfo={false}
             />
 
-            {/* Selected Ring Badge */}
-            {selectedRing && (
-                <div className="absolute bottom-4 left-4 z-10 bg-orange-500/90 text-white px-3 py-1.5 rounded-lg text-xs font-medium backdrop-blur-sm">
-                    Ring: {selectedRing}
-                </div>
-            )}
-
-            {/* Search Match Badge */}
-            {searchMatchSet && (
-                <div className="absolute bottom-4 right-4 z-10 bg-cyan-500/90 text-white px-3 py-1.5 rounded-lg text-xs font-medium backdrop-blur-sm">
-                    {searchMatchSet.size} match{searchMatchSet.size !== 1 ? 'es' : ''}
+            {/* Hover Tooltip (Bottom Left) */}
+            {hoverNode && (
+                <div className="absolute bottom-4 left-4 z-10 bg-card/90 backdrop-blur-md border border-border p-4 rounded-xl shadow-lg max-w-sm pointer-events-none">
+                    {(() => {
+                        const node = data.graph.nodes.find(n => n.id === hoverNode);
+                        if (!node) return null;
+                        return (
+                            <div className="space-y-2">
+                                <div className="flex items-center justify-between">
+                                    <h4 className="font-bold text-t-primary text-lg">{node.id}</h4>
+                                    <span className={`px-2 py-0.5 rounded text-xs font-bold ${node.riskScore > 80 ? 'bg-red-500/20 text-red-600' : node.riskScore > 50 ? 'bg-amber-500/20 text-amber-600' : 'bg-blue-500/20 text-blue-600'}`}>
+                                        Risk: {node.riskScore.toFixed(1)}
+                                    </span>
+                                </div>
+                                <div className="grid grid-cols-2 gap-4 text-xs text-t-secondary">
+                                    <div>In-Degree: <span className="text-t-primary">{node.inDegree}</span></div>
+                                    <div>Out-Degree: <span className="text-t-primary">{node.outDegree}</span></div>
+                                    <div>Total In: <span className="text-t-primary">${node.totalIn.toLocaleString()}</span></div>
+                                    <div>Total Out: <span className="text-t-primary">${node.totalOut.toLocaleString()}</span></div>
+                                </div>
+                                {node.patterns.length > 0 && (
+                                    <div className="pt-2 border-t border-border mt-2">
+                                        <div className="text-xs font-semibold text-t-muted mb-1">Detected Patterns:</div>
+                                        <div className="flex flex-wrap gap-1">
+                                            {node.patterns.map(p => (
+                                                <span key={p} className="px-1.5 py-0.5 bg-badge text-t-secondary rounded-[4px] text-[10px] uppercase border border-border">
+                                                    {p}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        );
+                    })()}
                 </div>
             )}
         </div>
