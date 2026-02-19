@@ -1,14 +1,6 @@
 'use client';
 
 import React, { useState } from 'react';
-// Removed react-dropzone import as we use custom implementation
-// I did NOT install react-dropzone. I will implement custom drag and drop or use input.
-// Actually, standard input type="file" styled is easier and sufficient.
-// But user asked for premium feel. Custom drag and drop is better.
-// I will implement a simple custom drag and drop without extra heavy lib, or just add react-dropzone.
-// Adding react-dropzone is safer.
-// Let me quickly install it or just write the logic (it's simple: onDrop, onDragOver).
-
 import Papa from 'papaparse';
 import { UploadCloud, FileType, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { Transaction } from '@/types';

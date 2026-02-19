@@ -1,52 +1,32 @@
 import { Transaction, GraphData, Node, Link, FraudRing, SuspiciousAccount, AnalysisResult } from '@/types';
 
-// Helper to calculate risk score based on patterns
-const calculateRiskScore = (patterns: string[], flags: string[]): number => {
-    let score = 0;
-    if (patterns.includes('cycle')) score += 50;
-    if (patterns.includes('fan_in')) score += 30;
-    if (patterns.includes('fan_out')) score += 30;
-    if (rowsIncludes(patterns, 'shell')) score += 40;
-
-    // Cap at 100
-    return Math.min(100, score);
-};
-
-const rowsIncludes = (arr: string[], str: string) => arr.some(el => el.includes(str));
-
+// ──────────────────────────────────────────────
+// 1. BUILD GRAPH — O(T) where T = transactions
+// ──────────────────────────────────────────────
 export const buildGraph = (transactions: Transaction[]): GraphData => {
     const nodesMap = new Map<string, Node>();
     const links: Link[] = [];
 
-    transactions.forEach(tx => {
-        // Ensure nodes exist
+    for (const tx of transactions) {
         if (!nodesMap.has(tx.sender_id)) {
             nodesMap.set(tx.sender_id, {
-                id: tx.sender_id,
-                riskScore: 0,
-                flags: [],
-                patterns: [],
+                id: tx.sender_id, riskScore: 0,
+                flags: [], patterns: [],
                 inDegree: 0, outDegree: 0,
-                totalIn: 0, totalOut: 0,
-                val: 1
+                totalIn: 0, totalOut: 0, val: 1,
             });
         }
         if (!nodesMap.has(tx.receiver_id)) {
             nodesMap.set(tx.receiver_id, {
-                id: tx.receiver_id,
-                riskScore: 0,
-                flags: [],
-                patterns: [],
+                id: tx.receiver_id, riskScore: 0,
+                flags: [], patterns: [],
                 inDegree: 0, outDegree: 0,
-                totalIn: 0, totalOut: 0,
-                val: 1
+                totalIn: 0, totalOut: 0, val: 1,
             });
         }
 
         const sender = nodesMap.get(tx.sender_id)!;
         const receiver = nodesMap.get(tx.receiver_id)!;
-
-        // Update stats
         sender.outDegree++;
         sender.totalOut += tx.amount;
         receiver.inDegree++;
@@ -57,254 +37,326 @@ export const buildGraph = (transactions: Transaction[]): GraphData => {
             target: tx.receiver_id,
             amount: tx.amount,
             timestamp: tx.timestamp,
-            transaction_id: tx.transaction_id
+            transaction_id: tx.transaction_id,
         });
-    });
+    }
 
-    return {
-        nodes: Array.from(nodesMap.values()),
-        links
-    };
+    return { nodes: Array.from(nodesMap.values()), links };
 };
 
-export const detectCycles = (graph: GraphData): FraudRing[] => {
-    const rings: FraudRing[] = [];
-    const visited = new Set<string>();
-    const recursionStack = new Set<string>();
-    // Adjacency list
+// ──────────────────────────────────────────────
+// Helper: Build adjacency list once — O(L)
+// ──────────────────────────────────────────────
+const buildAdjacency = (links: Link[]): Map<string, string[]> => {
     const adj = new Map<string, string[]>();
-
-    graph.links.forEach(link => {
+    for (const link of links) {
         const src = typeof link.source === 'object' ? (link.source as Node).id : link.source;
         const tgt = typeof link.target === 'object' ? (link.target as Node).id : link.target;
         if (!adj.has(src)) adj.set(src, []);
         adj.get(src)!.push(tgt);
-    });
+    }
+    return adj;
+};
 
+// ──────────────────────────────────────────────
+// Helper: Link lookup maps for O(1) access
+// ──────────────────────────────────────────────
+const buildLinkMaps = (links: Link[]) => {
+    const byTarget = new Map<string, Link[]>();
+    const bySource = new Map<string, Link[]>();
+    for (const link of links) {
+        const src = typeof link.source === 'object' ? (link.source as Node).id : link.source;
+        const tgt = typeof link.target === 'object' ? (link.target as Node).id : link.target;
+        if (!byTarget.has(tgt)) byTarget.set(tgt, []);
+        byTarget.get(tgt)!.push(link);
+        if (!bySource.has(src)) bySource.set(src, []);
+        bySource.get(src)!.push(link);
+    }
+    return { byTarget, bySource };
+};
+
+// ──────────────────────────────────────────────
+// 2. CYCLE DETECTION — DFS depth-limited 3-5
+//    Complexity: O(N * d^5) where d = avg degree
+// ──────────────────────────────────────────────
+export const detectCycles = (graph: GraphData, adj: Map<string, string[]>): FraudRing[] => {
+    const rings: FraudRing[] = [];
+    const recordedCycles = new Set<string>();
     const path: string[] = [];
-
-    // Simple DFS for cycle detection (limited depth 3-5)
-    // Note: This is a simplified version. For large graphs, Johnson's algorithm is better but complex.
-    // We use DFS with depth limit.
+    const pathSet = new Set<string>();
 
     const findCycles = (curr: string, start: string, depth: number) => {
         path.push(curr);
-        visited.add(curr);
+        pathSet.add(curr);
 
         const neighbors = adj.get(curr) || [];
         for (const neighbor of neighbors) {
             if (neighbor === start && depth >= 3 && depth <= 5) {
-                // Found cycle
                 const cycleMembers = [...path];
-                // Check if this cycle is already recorded (simple distinct check)
-                const sortedMembers = [...cycleMembers].sort().join(',');
-                const exists = rings.some(r => [...r.members].sort().join(',') === sortedMembers);
-                if (!exists) {
+                const key = [...cycleMembers].sort().join(',');
+                if (!recordedCycles.has(key)) {
+                    recordedCycles.add(key);
                     rings.push({
-                        id: `RING_${rings.length + 1}`,
+                        id: `RING_${String(rings.length + 1).padStart(3, '0')}`,
                         type: 'cycle',
-                        riskScore: 90, // Cycles are high risk
+                        riskScore: 90,
                         members: cycleMembers,
-                        patternDetails: `Circular flow of length ${depth}`
+                        patternDetails: `Circular fund routing: ${cycleMembers.join(' → ')} → ${start} (length ${depth})`,
                     });
                 }
-            } else if (!path.includes(neighbor) && depth < 5) {
+            } else if (!pathSet.has(neighbor) && depth < 5) {
                 findCycles(neighbor, start, depth + 1);
             }
         }
 
         path.pop();
-        visited.delete(curr); // Backtrack allows finding all cycles
+        pathSet.delete(curr);
     };
 
-    // Run for each node
-    graph.nodes.forEach(node => {
+    for (const node of graph.nodes) {
         findCycles(node.id, node.id, 1);
-    });
+    }
 
     return rings;
 };
 
+// ──────────────────────────────────────────────
+// 3. TEMPORAL VELOCITY CHECK — 72h sliding window
+//    O(T log T) for the sort
+// ──────────────────────────────────────────────
 const hasHighVelocity = (timestamps: string[], countThreshold: number, windowHours: number): boolean => {
     if (timestamps.length < countThreshold) return false;
-
     const times = timestamps.map(t => new Date(t).getTime()).sort((a, b) => a - b);
     const windowMs = windowHours * 60 * 60 * 1000;
 
     for (let i = 0; i <= times.length - countThreshold; i++) {
-        const start = times[i];
-        const end = times[i + countThreshold - 1]; // e.g., if threshold is 10, index i+9
-        if (end - start <= windowMs) {
+        if (times[i + countThreshold - 1] - times[i] <= windowMs) {
             return true;
         }
     }
     return false;
 };
 
-export const detectSmurfing = (graph: GraphData): FraudRing[] => {
+// ──────────────────────────────────────────────
+// 4. SMURFING DETECTION — Fan-in / Fan-out
+//    10+ unique counterparts within 72h
+//    FALSE-POSITIVE GUARD: skip nodes with both
+//    high in AND high out (likely merchants)
+// ──────────────────────────────────────────────
+export const detectSmurfing = (
+    graph: GraphData,
+    linksByTarget: Map<string, Link[]>,
+    linksBySource: Map<string, Link[]>,
+): FraudRing[] => {
     const rings: FraudRing[] = [];
 
-    graph.nodes.forEach(node => {
-        // Fan-in: 10+ senders -> 1 receiver WITHIN 72 HOURS
-        if (node.inDegree >= 10 && node.outDegree <= 1) {
-            const incomingLinks = graph.links.filter(l => (typeof l.target === 'object' ? (l.target as Node).id : l.target) === node.id);
-            const senders = incomingLinks.map(l => (typeof l.source === 'object' ? (l.source as Node).id : l.source));
-            const uniqueSenders = new Set(senders);
+    for (const node of graph.nodes) {
+        // FALSE POSITIVE CONTROL: A legitimate merchant/payroll account
+        // has BOTH high inDegree AND high outDegree. Mules typically
+        // only aggregate (high in, low out) or disperse (high out, low in).
+        if (node.inDegree >= 5 && node.outDegree >= 5) continue;
 
-            if (uniqueSenders.size >= 10) {
-                // Check temporal condition
+        // Fan-in: 10+ senders → 1 receiver within 72h
+        if (node.inDegree >= 10 && node.outDegree <= 2) {
+            const incomingLinks = linksByTarget.get(node.id) || [];
+            const senderSet = new Set(incomingLinks.map(l =>
+                typeof l.source === 'object' ? (l.source as Node).id : l.source
+            ));
+
+            if (senderSet.size >= 10) {
                 const timestamps = incomingLinks.map(l => l.timestamp);
                 if (hasHighVelocity(timestamps, 10, 72)) {
                     rings.push({
-                        id: `FANIN_${rings.length + 1}`,
+                        id: `FANIN_${String(rings.length + 1).padStart(3, '0')}`,
                         type: 'fan_in',
-                        riskScore: 85, // Increased confidence due to time window
-                        members: [node.id, ...Array.from(uniqueSenders)],
-                        patternDetails: `Fan-in: ${uniqueSenders.size} accounts sending to ${node.id} within 72h`
+                        riskScore: 85,
+                        members: [node.id, ...Array.from(senderSet)],
+                        patternDetails: `Fan-in aggregator: ${senderSet.size} accounts → ${node.id} within 72h window`,
                     });
                 }
             }
         }
 
-        // Fan-out: 1 sender -> 10+ receivers WITHIN 72 HOURS
-        if (node.outDegree >= 10 && node.inDegree <= 1) {
-            const outgoingLinks = graph.links.filter(l => (typeof l.source === 'object' ? (l.source as Node).id : l.source) === node.id);
-            const receivers = outgoingLinks.map(l => (typeof l.target === 'object' ? (l.target as Node).id : l.target));
-            const uniqueReceivers = new Set(receivers);
+        // Fan-out: 1 sender → 10+ receivers within 72h
+        if (node.outDegree >= 10 && node.inDegree <= 2) {
+            const outgoingLinks = linksBySource.get(node.id) || [];
+            const receiverSet = new Set(outgoingLinks.map(l =>
+                typeof l.target === 'object' ? (l.target as Node).id : l.target
+            ));
 
-            if (uniqueReceivers.size >= 10) {
-                // Check temporal condition
+            if (receiverSet.size >= 10) {
                 const timestamps = outgoingLinks.map(l => l.timestamp);
                 if (hasHighVelocity(timestamps, 10, 72)) {
                     rings.push({
-                        id: `FANOUT_${rings.length + 1}`,
+                        id: `FANOUT_${String(rings.length + 1).padStart(3, '0')}`,
                         type: 'fan_out',
                         riskScore: 85,
-                        members: [node.id, ...Array.from(uniqueReceivers)],
-                        patternDetails: `Fan-out: ${node.id} sending to ${uniqueReceivers.size} accounts within 72h`
+                        members: [node.id, ...Array.from(receiverSet)],
+                        patternDetails: `Fan-out dispersal: ${node.id} → ${receiverSet.size} accounts within 72h window`,
                     });
                 }
             }
         }
-    });
+    }
 
     return rings;
 };
 
-export const detectShells = (graph: GraphData): FraudRing[] => {
+// ──────────────────────────────────────────────
+// 5. SHELL NETWORK DETECTION
+//    Chains of 3+ hops through low-volume
+//    intermediaries (2-3 total transactions)
+// ──────────────────────────────────────────────
+export const detectShells = (graph: GraphData, adj: Map<string, string[]>): FraudRing[] => {
     const rings: FraudRing[] = [];
     const shellCandidates = new Set<string>();
 
-    // Identify potential shell accounts (low volume intermediaries)
-    graph.nodes.forEach(node => {
+    for (const node of graph.nodes) {
         const totalTx = node.inDegree + node.outDegree;
-        // Requirement: "intermediate accounts have only 2–3 total transactions"
         if (totalTx >= 2 && totalTx <= 3 && node.inDegree > 0 && node.outDegree > 0) {
             shellCandidates.add(node.id);
         }
-    });
+    }
 
-    const adj = new Map<string, string[]>();
-    graph.links.forEach(l => {
-        const src = typeof l.source === 'object' ? (l.source as Node).id : l.source;
-        const tgt = typeof l.target === 'object' ? (l.target as Node).id : l.target;
-        if (!adj.has(src)) adj.set(src, []);
-        adj.get(src)!.push(tgt);
-    });
+    const recordedChains = new Set<string>();
 
-    // DFS to find chains: Start -> Shell -> ... -> Shell -> End
-    const findShellChains = (curr: string, path: string[]) => {
+    const findShellChains = (curr: string, path: string[], pathSet: Set<string>) => {
         path.push(curr);
+        pathSet.add(curr);
 
         const neighbors = adj.get(curr) || [];
         for (const neighbor of neighbors) {
+            if (pathSet.has(neighbor)) continue;
+
             if (shellCandidates.has(neighbor)) {
-                // Continue chain if not revisiting
-                if (!path.includes(neighbor)) {
-                    findShellChains(neighbor, path);
-                }
+                findShellChains(neighbor, path, pathSet);
             } else {
-                // Potential end of chain
-                // Valid chain: Non-Shell -> Shell -> ... -> Shell -> Non-Shell
-                // Check length. "3+ hops" means 4 nodes: Start, S1, S2, End.
-                // Current path has [Start, S1, S2]. Neighbor is End.
+                // End of chain — require 3+ hops (4+ nodes) with shell intermediaries
                 if (path.length >= 3) {
-                    // Ensure at least intermediate nodes are shells (guaranteed by recursion logic)
-                    // and check we have actual shell content
                     const hasShells = path.some(p => shellCandidates.has(p));
                     if (hasShells) {
                         const fullChain = [...path, neighbor];
-
-                        // Simple check to avoid duplicates or sub-segments
-                        const chainId = fullChain.join('->');
-                        const exists = rings.some(r => r.members.join('->').includes(chainId) || chainId.includes(r.members.join('->')));
-
-                        if (!exists) {
+                        const key = fullChain.join('→');
+                        // Avoid sub-chains
+                        if (!recordedChains.has(key)) {
+                            recordedChains.add(key);
                             rings.push({
-                                id: `SHELL_${rings.length + 1}`,
-                                type: 'shell', // matches FraudRing type definition in types/index.ts? Need to check.
-                                riskScore: 85,
+                                id: `SHELL_${String(rings.length + 1).padStart(3, '0')}`,
+                                type: 'shell',
+                                riskScore: 80,
                                 members: fullChain,
-                                patternDetails: `Layered Shell Chain: ${fullChain.length - 1} hops`
+                                patternDetails: `Layered shell chain: ${fullChain.join(' → ')} (${fullChain.length - 1} hops)`,
                             });
                         }
                     }
                 }
             }
         }
+
         path.pop();
+        pathSet.delete(curr);
     };
 
-    graph.nodes.forEach(node => {
-        // Start DFS from non-shell nodes
+    for (const node of graph.nodes) {
         if (!shellCandidates.has(node.id)) {
-            findShellChains(node.id, []);
+            findShellChains(node.id, [], new Set());
         }
-    });
+    }
 
     return rings;
 };
 
-// Main Analysis Function
+// ──────────────────────────────────────────────
+// 6. SUSPICION SCORE METHODOLOGY
+//    Weighted multi-factor scoring:
+//    - cycle membership:   +50 points
+//    - fan_in membership:  +30 points  
+//    - fan_out membership: +30 points
+//    - shell membership:   +25 points
+//    - high_velocity flag: +15 points (72h window)
+//    Capped at 100. Sorted descending.
+// ──────────────────────────────────────────────
+const computeSuspicionScore = (patterns: string[]): number => {
+    let score = 0;
+    if (patterns.includes('cycle')) score += 50;
+    if (patterns.includes('fan_in')) score += 30;
+    if (patterns.includes('fan_out')) score += 30;
+    if (patterns.includes('shell')) score += 25;
+    if (patterns.includes('high_velocity')) score += 15;
+    return Math.min(100, score);
+};
+
+// ──────────────────────────────────────────────
+// 7. MAIN ANALYSIS ORCHESTRATOR — O(T + N * d^5)
+// ──────────────────────────────────────────────
 export const analyzeGraph = (transactions: Transaction[]): AnalysisResult => {
     const startTime = performance.now();
 
     const graph = buildGraph(transactions);
-    const cycles = detectCycles(graph);
-    const smurfs = detectSmurfing(graph);
-    const shells = detectShells(graph);
 
+    // Pre-compute lookup structures (O(L))
+    const adj = buildAdjacency(graph.links);
+    const { byTarget, bySource } = buildLinkMaps(graph.links);
+
+    // Run all detectors
+    const cycles = detectCycles(graph, adj);
+    const smurfs = detectSmurfing(graph, byTarget, bySource);
+    const shells = detectShells(graph, adj);
     const allRings = [...cycles, ...smurfs, ...shells];
 
-    const suspiciousAccounts: SuspiciousAccount[] = [];
-    const flaggedNodeIds = new Set<string>();
+    // Build O(1) node lookup
+    const nodeMap = new Map<string, Node>();
+    for (const n of graph.nodes) nodeMap.set(n.id, n);
 
-    // Mark nodes
-    allRings.forEach(ring => {
-        ring.members.forEach(memberId => {
-            const node = graph.nodes.find(n => n.id === memberId);
+    // Mark nodes with patterns
+    const flaggedNodeIds = new Set<string>();
+    for (const ring of allRings) {
+        for (const memberId of ring.members) {
+            const node = nodeMap.get(memberId);
             if (node) {
                 if (!node.patterns.includes(ring.type)) node.patterns.push(ring.type);
-                node.riskScore = Math.max(node.riskScore, ring.riskScore);
+
+                // Add descriptive pattern strings matching doc format
+                const descriptivePattern = ring.type === 'cycle'
+                    ? `cycle_length_${ring.members.length}`
+                    : ring.type === 'fan_in' ? 'fan_in_aggregation'
+                        : ring.type === 'fan_out' ? 'fan_out_dispersal'
+                            : 'shell_layering';
+                if (!node.patterns.includes(descriptivePattern)) {
+                    node.patterns.push(descriptivePattern);
+                }
+
+                // Add high_velocity if applicable
+                if ((ring.type === 'fan_in' || ring.type === 'fan_out') && !node.patterns.includes('high_velocity')) {
+                    node.patterns.push('high_velocity');
+                }
+
                 flaggedNodeIds.add(memberId);
             }
-        });
-    });
+        }
+    }
 
-    // Generate suspicious accounts list
-    flaggedNodeIds.forEach(id => {
-        const node = graph.nodes.find(n => n.id === id);
+    // Compute suspicion scores
+    for (const node of graph.nodes) {
+        node.riskScore = computeSuspicionScore(node.patterns);
+        node.val = node.riskScore > 50 ? 3 : 1; // Make suspicious nodes larger in viz
+    }
+
+    // Build suspicious accounts list
+    const suspiciousAccounts: SuspiciousAccount[] = [];
+    for (const id of flaggedNodeIds) {
+        const node = nodeMap.get(id);
         if (node) {
             suspiciousAccounts.push({
                 account_id: node.id,
                 suspicion_score: node.riskScore,
-                detected_patterns: node.patterns,
-                ring_id: allRings.find(r => r.members.includes(id))?.id
+                detected_patterns: [...node.patterns],
+                ring_id: allRings.find(r => r.members.includes(id))?.id,
             });
         }
-    });
+    }
 
-    // Sort by score
+    // Sort descending by score (required by doc)
     suspiciousAccounts.sort((a, b) => b.suspicion_score - a.suspicion_score);
 
     const endTime = performance.now();
@@ -318,7 +370,7 @@ export const analyzeGraph = (transactions: Transaction[]): AnalysisResult => {
             total_accounts: graph.nodes.length,
             flagged_accounts: suspiciousAccounts.length,
             rings_detected: allRings.length,
-            total_transactions: transactions.length
-        }
+            total_transactions: transactions.length,
+        },
     };
 };
