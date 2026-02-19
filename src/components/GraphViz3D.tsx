@@ -2,7 +2,7 @@
 
 import React, { useMemo, useEffect, useRef, useCallback, useState } from 'react';
 import dynamic from 'next/dynamic';
-import { AnalysisResult, Node, Link } from '@/types';
+import { AnalysisResult } from '@/types';
 import { useTheme } from '@/context/ThemeContext';
 import * as THREE from 'three';
 
@@ -23,6 +23,10 @@ const THEME_BG: Record<string, string> = {
     black: '#000000',
 };
 
+// Reusable geometry to prevent memory leaks (16 segments is enough for small nodes)
+const NODE_GEOMETRY = new THREE.SphereGeometry(4, 16, 16);
+const RING_GEOMETRY = new THREE.SphereGeometry(6, 16, 16);
+
 export default function GraphViz3D({ data, selectedRing, searchQuery = '' }: GraphViz3DProps) {
     const fgRef = useRef<any>(null);
     const { theme } = useTheme();
@@ -30,14 +34,13 @@ export default function GraphViz3D({ data, selectedRing, searchQuery = '' }: Gra
     const [highlightNodes, setHighlightNodes] = useState<Set<string>>(new Set());
     const [highlightLinks, setHighlightLinks] = useState<Set<string>>(new Set());
 
-    // Pre-compute ring member set
+    // Pre-compute lookup sets
     const ringMemberSet = useMemo(() => {
         if (!selectedRing) return null;
         const ring = data.fraudRings.find(r => r.id === selectedRing);
         return ring ? new Set(ring.members) : null;
     }, [selectedRing, data.fraudRings]);
 
-    // Pre-compute search matched node set
     const searchMatchSet = useMemo(() => {
         if (!searchQuery.trim()) return null;
         const q = searchQuery.toLowerCase();
@@ -48,7 +51,6 @@ export default function GraphViz3D({ data, selectedRing, searchQuery = '' }: Gra
         return matched.size > 0 ? matched : null;
     }, [searchQuery, data.graph.nodes]);
 
-    // Pre-compute neighbors map for O(1) hover lookup
     const neighborsMap = useMemo(() => {
         const map = new Map<string, string[]>();
         data.graph.links.forEach(link => {
@@ -62,7 +64,26 @@ export default function GraphViz3D({ data, selectedRing, searchQuery = '' }: Gra
         return map;
     }, [data.graph.links]);
 
-    // Handle node hover
+    // Create pooled materials to avoid creating 1000s of material instances
+    // We use MeshPhongMaterial for better performance than MeshPhysicalMaterial
+    const materials = useMemo(() => {
+        const createMat = (color: string, opacity = 1) => new THREE.MeshPhongMaterial({
+            color,
+            transparent: opacity < 1,
+            opacity,
+            shininess: 50,
+        });
+
+        return {
+            highRisk: createMat('#EF4444'),
+            medRisk: createMat('#F59E0B'),
+            safe: createMat(theme === 'bright' ? '#3B82F6' : '#60A5FA'),
+            match: createMat('#22D3EE'),
+            ring: createMat('#F97316'),
+            dimmed: createMat(theme === 'bright' ? '#E5E7EB' : '#1E293B', 0.3), // Transparent for dimmed
+        };
+    }, [theme]);
+
     const handleNodeHover = useCallback((node: any | null) => {
         setHoverNode(node ? node.id : null);
         if (node) {
@@ -83,66 +104,33 @@ export default function GraphViz3D({ data, selectedRing, searchQuery = '' }: Gra
         }
     }, [neighborsMap, data.graph.links]);
 
-    // Focus camera
-    useEffect(() => {
-        if (selectedRing && fgRef.current && ringMemberSet) {
-            let x = 0, y = 0, z = 0, count = 0;
-            for (const node of data.graph.nodes) {
-                if (ringMemberSet.has(node.id)) {
-                    x += node.x || 0;
-                    y += node.y || 0;
-                    z += node.z || 0;
-                    count++;
-                }
-            }
-            if (count > 0) {
-                fgRef.current.cameraPosition(
-                    { x: x / count + 150, y: y / count + 100, z: z / count + 150 },
-                    { x: x / count, y: y / count, z: z / count },
-                    2000
-                );
-            }
-        }
-    }, [selectedRing, data.graph.nodes, ringMemberSet]);
-
-    const graphData = useMemo(() => ({
-        nodes: data.graph.nodes.map(n => ({ ...n })),
-        links: data.graph.links.map(l => ({ ...l })),
-    }), [data]);
-
-    // Custom 3D Object for Nodes (Glassmorphism)
     const nodeThreeObject = useCallback((node: any) => {
-        // Base color
-        let color = theme === 'bright' ? '#3B82F6' : '#60A5FA';
-        if (node.riskScore > 80) color = '#EF4444';
-        else if (node.riskScore > 50) color = '#F59E0B';
+        let mat = materials.safe;
 
-        // Override if matched/ring/highlighted
-        if (searchMatchSet && searchMatchSet.has(node.id)) color = '#22D3EE';
-        else if (ringMemberSet && ringMemberSet.has(node.id)) color = '#F97316';
-
-        // Dim if hovering another node and not related
-        if (hoverNode && !highlightNodes.has(node.id)) {
-            color = theme === 'bright' ? '#E5E7EB' : '#1E293B'; // Grayed out
+        // Priority 1: Search Match
+        if (searchMatchSet && searchMatchSet.has(node.id)) mat = materials.match;
+        // Priority 2: Ring Member
+        else if (ringMemberSet && ringMemberSet.has(node.id)) mat = materials.ring;
+        // Priority 3: Hover Logic (Dimming)
+        else if (hoverNode && !highlightNodes.has(node.id)) mat = materials.dimmed;
+        // Priority 4: Risk Score
+        else {
+            if (node.riskScore > 80) mat = materials.highRisk;
+            else if (node.riskScore > 50) mat = materials.medRisk;
         }
 
-        const size = node.riskScore > 50 ? 6 : 4;
-        const geometry = new THREE.SphereGeometry(size, 32, 32);
-        const material = new THREE.MeshPhysicalMaterial({
-            color: color,
-            metalness: 0.1,
-            roughness: 0.1,
-            transmission: 0.6, // Glass effect
-            thickness: 2,
-            clearcoat: 1,
-            clearcoatRoughness: 0.1,
-        });
+        const mesh = new THREE.Mesh(node.riskScore > 50 ? RING_GEOMETRY : NODE_GEOMETRY, mat);
+        return mesh;
+    }, [materials, searchMatchSet, ringMemberSet, hoverNode, highlightNodes]);
 
-        return new THREE.Mesh(geometry, material);
-    }, [theme, ringMemberSet, searchMatchSet, hoverNode, highlightNodes]);
+    // Cleanup materials on unmount
+    useEffect(() => {
+        return () => {
+            Object.values(materials).forEach(m => m.dispose());
+        };
+    }, [materials]);
 
     const getLinkColor = useCallback((link: any) => {
-        // Highlight logic
         const srcId = typeof link.source === 'object' ? link.source.id : link.source;
         const tgtId = typeof link.target === 'object' ? link.target.id : link.target;
         const linkId = link.transaction_id || `${srcId}-${tgtId}`;
@@ -150,29 +138,24 @@ export default function GraphViz3D({ data, selectedRing, searchQuery = '' }: Gra
         if (hoverNode) {
             return highlightLinks.has(linkId) ? (theme === 'bright' ? '#1C1917' : '#F1F5F9') : 'rgba(100,100,100,0.02)';
         }
-
         if (ringMemberSet) {
             if (ringMemberSet.has(srcId) && ringMemberSet.has(tgtId)) return '#EF4444';
             return 'rgba(100, 100, 100, 0.03)';
         }
-
         return theme === 'bright' ? 'rgba(150, 150, 150, 0.2)' : 'rgba(180, 180, 180, 0.15)';
     }, [ringMemberSet, theme, hoverNode, highlightLinks]);
 
-    const handleNodeClick = useCallback((node: any) => {
-        if (!fgRef.current) return;
-        const distance = 80;
-        const distRatio = 1 + distance / Math.hypot(node.x || 1, node.y || 1, node.z || 1);
-        fgRef.current.cameraPosition(
-            { x: (node.x || 0) * distRatio, y: (node.y || 0) * distRatio, z: (node.z || 0) * distRatio },
-            { x: node.x, y: node.y, z: node.z },
-            1500
-        );
-    }, []);
+    // Memoize graph data to prevent re-renders
+    const graphData = useMemo(() => {
+        return {
+            nodes: data.graph.nodes,
+            links: data.graph.links
+        };
+    }, [data]);
 
     return (
         <div className="relative w-full h-[600px] border border-border rounded-2xl overflow-hidden shadow-xl bg-graph">
-            {/* Legend */}
+            {/* Legend - preserved */}
             <div className="absolute top-4 left-4 z-10 bg-card/80 backdrop-blur-md p-3 rounded-xl shadow-sm border border-border">
                 <h3 className="text-sm font-semibold text-t-primary">Network Visualization</h3>
                 <p className="text-xs text-t-secondary">{graphData.nodes.length} Accounts • {graphData.links.length} Edges</p>
@@ -188,20 +171,31 @@ export default function GraphViz3D({ data, selectedRing, searchQuery = '' }: Gra
                 ref={fgRef}
                 graphData={graphData}
                 nodeThreeObject={nodeThreeObject}
-                nodeLabel={(node: any) => node.id} // Simple label for now, or custom HTML tooltip
+                nodeLabel={() => ''} // Disable default label
                 linkColor={getLinkColor}
                 linkWidth={link => (hoverNode && highlightLinks.has(link.transaction_id || '') ? 2 : selectedRing ? 1.5 : 0.5)}
-                linkCurvature={0.25}
-                linkDirectionalParticles={2}
+                linkCurvature={0.2} // Reduced curvature for performance
+                // Reduced particles for performance: only show on highlighted or ring links
+                linkDirectionalParticles={link => (selectedRing || (hoverNode && highlightLinks.has(link.transaction_id || ''))) ? 2 : 0}
                 linkDirectionalParticleSpeed={0.005}
-                linkDirectionalParticleWidth={1.5}
+                linkDirectionalParticleWidth={2}
                 backgroundColor={THEME_BG[theme] || '#FDFCF8'}
-                onNodeClick={handleNodeClick}
+                onNodeClick={(node: any) => {
+                    const dist = 80;
+                    const ratio = 1 + dist / Math.hypot(node.x, node.y, node.z);
+                    fgRef.current?.cameraPosition(
+                        { x: node.x * ratio, y: node.y * ratio, z: node.z * ratio },
+                        { x: node.x, y: node.y, z: node.z },
+                        1000
+                    );
+                }}
                 onNodeHover={handleNodeHover}
                 showNavInfo={false}
+                warmupTicks={20} // Provide some initial stability
+                cooldownTicks={100} // Stop simulation sooner to save GPU
             />
 
-            {/* Hover Tooltip (Bottom Left) */}
+            {/* Tooltip - preserved */}
             {hoverNode && (
                 <div className="absolute bottom-4 left-4 z-10 bg-card/90 backdrop-blur-md border border-border p-4 rounded-xl shadow-lg max-w-sm pointer-events-none">
                     {(() => {
@@ -218,17 +212,15 @@ export default function GraphViz3D({ data, selectedRing, searchQuery = '' }: Gra
                                 <div className="grid grid-cols-2 gap-4 text-xs text-t-secondary">
                                     <div>In-Degree: <span className="text-t-primary">{node.inDegree}</span></div>
                                     <div>Out-Degree: <span className="text-t-primary">{node.outDegree}</span></div>
-                                    <div>Total In: <span className="text-t-primary">${node.totalIn.toLocaleString()}</span></div>
-                                    <div>Total Out: <span className="text-t-primary">${node.totalOut.toLocaleString()}</span></div>
+                                    <div>In: <span className="text-t-primary">${node.totalIn.toLocaleString()}</span></div>
+                                    <div>Out: <span className="text-t-primary">${node.totalOut.toLocaleString()}</span></div>
                                 </div>
                                 {node.patterns.length > 0 && (
                                     <div className="pt-2 border-t border-border mt-2">
                                         <div className="text-xs font-semibold text-t-muted mb-1">Detected Patterns:</div>
                                         <div className="flex flex-wrap gap-1">
                                             {node.patterns.map(p => (
-                                                <span key={p} className="px-1.5 py-0.5 bg-badge text-t-secondary rounded-[4px] text-[10px] uppercase border border-border">
-                                                    {p}
-                                                </span>
+                                                <span key={p} className="px-1.5 py-0.5 bg-badge text-t-secondary rounded-[4px] text-[10px] uppercase border border-border">{p}</span>
                                             ))}
                                         </div>
                                     </div>
